@@ -5,6 +5,7 @@
 
 import Control.Applicative
 import Control.Lens.Lens
+import Control.Lens.Tuple
 import Control.Lens.Traversal
 import Data.Foldable
 import qualified Data.Set as S
@@ -114,6 +115,54 @@ traverseParameterIdent f (UnPackTuple tuple d a) =
 traverseAnnotatedTail :: (Annotated t, Functor t) => Lens (t a) (t b) a b
 traverseAnnotatedTail f x = (\q -> fmap (const q) x) `fmap` f (annot x)
 
+class HasImportNames c where
+  traverseImportNames :: Traversal' (c a) (Ident a)
+
+instance HasImportNames ImportItem where
+  traverseImportNames f (ImportItem it_n (Just as_n) a) =
+    ImportItem it_n <$> (Just <$> f as_n) <*> pure a
+  traverseImportNames f (ImportItem it_n Nothing a) =
+    ImportItem <$> traverseHead f it_n <*> pure Nothing <*> pure a
+    where
+      traverseHead _ [] = pure []
+      traverseHead f' (h:hs) = (:) <$> f' h <*> pure hs
+
+instance HasImportNames FromItem where
+  traverseImportNames f (FromItem it_n (Just as_n) it_annot) =
+    FromItem it_n <$> (Just <$> f as_n) <*> pure it_annot
+  traverseImportNames f (FromItem it_n Nothing it_annot) =
+    FromItem <$> f it_n <*> pure Nothing <*> pure it_annot
+
+instance HasImportNames FromItems where
+  traverseImportNames _ x@(ImportEverything _) = pure x
+  traverseImportNames f (FromItems items it_annot) =
+    FromItems <$> (traverse . traverseImportNames) f items <*> pure it_annot
+
+instance HasImportNames Statement where
+  traverseImportNames f (Import items a) =
+    Import <$> (traverse . traverseImportNames) f items <*> pure a
+  traverseImportNames f (FromImport f_mod f_its a) =
+    FromImport f_mod <$> traverseImportNames f f_its <*> pure a
+  traverseImportNames _ x = pure x
+
+instance HasExprs Statement where
+  myExprs f (While w_cond w_body w_else a) =
+    While <$> f w_cond <*> pure w_body <*> pure w_else <*> pure a
+  myExprs f (For f_targets f_generator f_body f_else a) =
+    For <$> traverse f f_targets <*> f f_generator <*> pure f_body <*> pure f_else <*> pure a
+  myExprs f (Fun f_name f_args f_result_annot f_body a) =
+    Fun f_name <$> (traverse . myExprs) f f_args <*> traverse f f_result_annot
+    <*> pure f_body <*> pure a
+  myExprs f (Class c_name c_args c_body a) =
+    Class c_name <$> (traverse . myExprs) f c_args <*> pure c_body <*> pure a
+  myExprs f (Conditional c_guards c_else a) =
+    Conditional <$> (traverse . _1) f c_guards <*> pure c_else <*> pure a
+  -- Okay, now this is a PITA. I need to find expressions here that are referenced, but not
+  -- assigned. So in this:
+  -- (a[2], b, q.c) = funky()
+  -- I need to find "funky", "a", and "q". But NOT b.
+  myExprs f (Assign a_to a_expr aannot) = undefined
+  
 -- Then I need to write a HasExpr instance for Statement,
 -- and a Plated instance for Statement and Expr
 
